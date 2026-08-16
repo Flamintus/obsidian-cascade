@@ -360,7 +360,12 @@ function buildHeadingMap(text, startLevel) {
 		if (!blank) {
 			if (firstLine < 0) firstLine = i;
 			lastLevel = levels[i];
-			lastFullLineWasList = lists[i];
+
+			// An indented line following an item continues it, in Markdown as
+			// on screen. It must therefore not close the list, failing which
+			// the next bullet would pass for the start of a new one and take
+			// the spacing that comes with it.
+			lastFullLineWasList = lists[i] || (lastFullLineWasList && /^[ \t]+\S/.test(line));
 		}
 	}
 

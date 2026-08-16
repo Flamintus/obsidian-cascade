@@ -1,7 +1,7 @@
 {
 	"id": "cascade",
 	"name": "Cascade",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"minAppVersion": "1.0.0",
 	"description": "Indents content under each heading, draws a vertical guide per level, and numbers headings automatically. Available in both reading and editing views.",
 	"author": "Flamintus",
