@@ -3,30 +3,31 @@
 /*
  * Cascade
  * -------
- * Trois fonctions, chacune activable separement :
- *   - indentation du contenu sous les titres
- *   - barre verticale par niveau parent, comme les guides des listes imbriquees
- *   - numerotation automatique des titres (1, 1.1, 1.1.1 ...)
+ * Three functions, each of which can be turned on on its own:
+ *   - indentation of the content sitting under a heading
+ *   - one vertical bar per parent level, like the guides Obsidian already
+ *     draws for nested lists
+ *   - automatic heading numbering (1, 1.1, 1.1.1 ...)
  *
- * Deux modes, actives et regles independamment : Lecture (et export PDF) et
- * Edition (Live Preview et Source).
+ * Two views, enabled and tuned independently: Reading (and PDF export) and
+ * Editing (Live Preview and Source).
  *
- * Principe
- *   Niveaux et numeros sont lus dans la SOURCE Markdown, jamais deduits du
- *   rendu. Les deux modes appellent la meme fonction buildHeadingMap sur le
- *   meme texte : ils ne peuvent donc pas diverger.
+ * Principle
+ *   Levels and numbers are read from the Markdown SOURCE, never inferred from
+ *   the rendered output. Both views call the same buildHeadingMap function on
+ *   the same text, so they cannot drift apart.
  *
- *   C'est aussi ce qui rend le resultat insensible a la virtualisation, que
- *   les deux modes pratiquent : un parcours du DOM y perdrait le titre servant
- *   d'ancre, et des compteurs CSS y repartiraient de zero au defilement.
+ *   This is also what makes the result immune to virtualization, which both
+ *   views practise: walking the DOM would lose the heading serving as the
+ *   anchor, and CSS counters would restart from zero while scrolling.
  *
- *   Le JS ne pose que des attributs data-hib-*. Tout le rendu est dans
+ *   The JS only sets data-hib-* attributes. All rendering lives in
  *   styles.css.
  *
- * Profondeur appliquee
- *   ligne de titre de niveau N -> N-1 crans
- *   contenu sous un titre N    -> N crans
- *   avant le premier titre     -> 0 cran
+ * Applied depth
+ *   heading line of level N     -> N-1 steps
+ *   content under a heading N   -> N steps
+ *   before the first heading    -> 0 steps
  */
 
 const { Plugin, PluginSettingTab, Setting } = require("obsidian");
@@ -34,29 +35,156 @@ const { ViewPlugin, Decoration } = require("@codemirror/view");
 const { RangeSetBuilder, StateEffect } = require("@codemirror/state");
 
 /* ==================================================================
-   Reglages
+   Translations
+
+   Obsidian translates its own interface but exposes nothing to plugins: each
+   one carries its own strings. English is the reference, any other language
+   is only a tracing of it, and a missing key falls back to it.
+   ================================================================== */
+
+const LOCALES = {
+	en: {
+		"mode.read.name": "Reading view",
+		"mode.read.desc": "Also applies to PDF export.",
+		"mode.edit.name": "Editing view",
+		"mode.edit.desc": "Live Preview and Source mode.",
+
+		"enabled.name": "Enable in this view",
+
+		"step.name": "Offset per level",
+		"step.desc": "In pixels. Content under an H2 is offset by twice this value. Above 50, deeply nested tables become narrow.",
+
+		"barWidth.name": "Bar thickness",
+		"barWidth.desc": "In pixels.",
+
+		"bleed.name": "Join between two blocks",
+		"bleed.desc": "In pixels. Height of the line that connects a block to the one before it. Empty = the theme's paragraph spacing. Increase it if the bars look dotted between two paragraphs.",
+
+		"headingBleed.name": "Join above a heading",
+		"headingBleed.desc": "In pixels. The space before a heading is far wider than the one between two paragraphs, so its join has a value of its own; without it the bars break just before every heading. Empty = the theme's heading top margin.",
+
+		"barColor.name": "Bar color",
+		"barColor.desc": "A CSS color. Empty = the theme's border color, which follows light and dark mode.",
+
+		"numbering.name": "Number headings",
+		"numbering.desc": "Adds 1, 1.1, 1.1.1 before each heading, in the display only: Markdown files are never modified.",
+
+		"numberingStart.name": "First numbered level",
+		"numberingStart.desc": "The heading level that carries rank 1. At 2, the H1 at the top of a note is left unnumbered and H2s become 1, 2, 3. At 1, the H1 becomes 1 and H2s become 1.1, 1.2.",
+
+		"numberGap.name": "Space after the number",
+		"numberGap.desc": "In pixels, between the number and the heading text. In pixels rather than em, so the gap stays the same at every heading level.",
+
+		"firstHeadingSpace.name": "Space above the first heading",
+		"firstHeadingSpace.desc": "In pixels. Concerns only the heading at the top of a note, which Obsidian leaves without a margin for lack of a block before it. Empty = paragraph spacing, the value Editing view applies.",
+
+		"tableSpace.name": "Space around a table",
+		"tableSpace.desc": "In pixels, above and below. Reproduces the margin Obsidian gives tables, but placed inside the block so the bars run through it instead of stopping there. Empty = paragraph spacing, so the appearance is unchanged.",
+
+		"listIndent.name": "List offset",
+		"listIndent.desc": "In pixels, up to the bullet. Empty = the position it holds in Reading view, where the item text sits at 3ch and the bullet 0.8em before it.",
+
+		"listSpacing.name": "Space before a list",
+		"listSpacing.desc": "In pixels, above the first bullet only. Empty = the theme's paragraph spacing.",
+
+		"listHanging.name": "Bullet hanging indent",
+		"listHanging.desc": "In pixels. How far the bullet sits back from its item text, which alone carries the list offset. This hanging indent is what aligns wrapped lines under the text rather than under the bullet. Empty = 0.8em, the Reading view value."
+	},
+
+	fr: {
+		"mode.read.name": "Mode Lecture",
+		"mode.read.desc": "S'applique aussi à l'export PDF.",
+		"mode.edit.name": "Mode Édition",
+		"mode.edit.desc": "Live Preview et mode Source.",
+
+		"enabled.name": "Activer dans ce mode",
+
+		"step.name": "Décalage par niveau",
+		"step.desc": "En pixels. Le contenu sous un H2 est décalé de deux fois cette valeur. Au-delà de 50, les tableaux profonds deviennent étroits.",
+
+		"barWidth.name": "Épaisseur des barres",
+		"barWidth.desc": "En pixels.",
+
+		"bleed.name": "Raccord entre deux blocs",
+		"bleed.desc": "En pixels. Hauteur du trait qui relie un bloc au bloc précédent. Vide = espacement des paragraphes du thème. Augmente si les barres apparaissent pointillées entre deux paragraphes.",
+
+		"headingBleed.name": "Raccord au-dessus d'un titre",
+		"headingBleed.desc": "En pixels. L'espace qui précède un titre est bien plus large que celui qui sépare deux paragraphes : son raccord lui est donc propre, sans quoi les barres se coupent juste avant chaque titre. Vide = marge supérieure des titres du thème.",
+
+		"barColor.name": "Couleur des barres",
+		"barColor.desc": "Couleur CSS. Vide = couleur de bordure du thème, qui suit le mode clair et sombre.",
+
+		"numbering.name": "Numéroter les titres",
+		"numbering.desc": "Ajoute 1, 1.1, 1.1.1 devant chaque titre, en affichage seulement : les fichiers Markdown ne sont jamais modifiés.",
+
+		"numberingStart.name": "Premier niveau numéroté",
+		"numberingStart.desc": "Niveau de titre qui porte le rang 1. Sur 2, le H1 en tête de note n'est pas numéroté et les H2 deviennent 1, 2, 3. Sur 1, le H1 devient 1 et les H2 deviennent 1.1, 1.2.",
+
+		"numberGap.name": "Espace après le numéro",
+		"numberGap.desc": "En pixels, entre le numéro et le texte du titre. En pixels et non en em, pour que l'écart reste le même à tous les niveaux de titre.",
+
+		"firstHeadingSpace.name": "Marge au-dessus du premier titre",
+		"firstHeadingSpace.desc": "En pixels. Ne concerne que le titre en tête de note, qu'Obsidian laisse sans marge faute de bloc avant lui. Vide = espacement des paragraphes, la valeur qu'applique le mode Édition.",
+
+		"tableSpace.name": "Espace autour d'un tableau",
+		"tableSpace.desc": "En pixels, au-dessus et au-dessous. Reprend la marge qu'Obsidian donne aux tableaux, mais posée à l'intérieur du bloc pour que les barres la traversent au lieu de s'y interrompre. Vide = espacement des paragraphes, donc apparence inchangée.",
+
+		"listIndent.name": "Décalage des listes",
+		"listIndent.desc": "En pixels, jusqu'à la puce. Vide = la position qu'elle occupe en mode Lecture, où le texte de l'item se tient à 3ch et la puce 0.8em avant lui.",
+
+		"listSpacing.name": "Marge avant une liste",
+		"listSpacing.desc": "En pixels, au-dessus de la première puce seulement. Vide = espacement des paragraphes du thème.",
+
+		"listHanging.name": "Retrait de la puce",
+		"listHanging.desc": "En pixels. Recul de la puce par rapport au texte de son item, qui seul porte le décalage des listes. C'est ce retrait qui aligne les lignes repliées sous le texte plutôt que sous la puce. Vide = 0.8em, la valeur du mode Lecture."
+	}
+};
+
+/**
+ * The set of strings matching the interface language.
+ *
+ * localStorage is the only source available: Obsidian writes the chosen
+ * language there and exposes it nowhere else. The value is missing until a
+ * choice has been made, and may carry a regional variant ("pt-BR"), hence the
+ * fallback to the base language and then to English.
+ *
+ * It is read here only, when the module loads: changing the language calls
+ * for restarting Obsidian, which the change imposes anyway.
+ */
+const STRINGS = (function () {
+	const tag = String(window.localStorage.getItem("language") || "");
+	return LOCALES[tag] || LOCALES[tag.split("-")[0]] || LOCALES.en;
+})();
+
+/** Translates a key. Falls back in turn to: language, English, raw key. */
+function t(key) {
+	return STRINGS[key] || LOCALES.en[key] || key;
+}
+
+/* ==================================================================
+   Settings
    ================================================================== */
 
 const DEFAULT_MODE = {
-	step: 40,             // px par niveau d'indentation
+	step: 40,             // px per indentation level
 	barWidth: 1,          // px
-	bleed: "",            // px ; vide = auto (espacement des paragraphes)
-	headingBleed: "",     // px ; vide = auto (marge superieure des titres)
-	barColor: "",         // couleur CSS ; vide = couleur de bordure du theme
-	numbering: true,      // numerotation automatique des titres
-	numberingStart: 2,    // niveau de titre portant le premier rang
-	numberGap: 8,         // px entre le numero et le texte du titre
+	bleed: "",            // px ; empty = auto (paragraph spacing)
+	headingBleed: "",     // px ; empty = auto (heading top margin)
+	barColor: "",         // CSS color ; empty = the theme's border color
+	numbering: true,      // automatic heading numbering
+	numberingStart: 2,    // heading level carrying the first rank
+	numberGap: 8,         // px between the number and the heading text
 
-	// Mode Edition seulement : le mode Lecture rend deja les listes comme des
-	// blocs, ces deux reglages n'y ont donc pas d'objet.
-	listIndent: "",       // px ; vide = auto (3ch - 0.8em, position de la puce en Lecture)
-	listSpacing: "",      // px ; vide = auto (espacement des paragraphes)
-	listHanging: "",      // px ; vide = auto (0.8em, recul de la puce en Lecture)
+	// Editing view only: Reading view already renders lists as blocks, so
+	// these two settings have no object there.
+	listIndent: "",       // px ; empty = auto (3ch - 0.8em, bullet position in Reading)
+	listSpacing: "",      // px ; empty = auto (paragraph spacing)
+	listHanging: "",      // px ; empty = auto (0.8em, bullet setback in Reading)
 
-	// Mode Lecture seulement : l'Edition espace deja son premier titre, et ses
-	// tableaux sont poses entre deux lignes jointives.
-	firstHeadingSpace: "", // px ; vide = auto (espacement des paragraphes)
-	tableSpace: ""         // px ; vide = auto (espacement des paragraphes)
+	// Reading view only: Editing already spaces its first heading, and its
+	// tables sit between two adjoining lines.
+	firstHeadingSpace: "", // px ; empty = auto (paragraph spacing)
+	tableSpace: ""         // px ; empty = auto (paragraph spacing)
 };
 
 const DEFAULT_SETTINGS = {
@@ -85,33 +213,33 @@ const DATA_ATTRS = [
 ];
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
 
-/* Blocs que Live Preview ne rend pas sous forme de ligne : tableaux, callouts,
-   blocs math, fichiers integres, images distantes. Aucune decoration de ligne
-   ne les atteint, ils sont traites a part. */
+/* Blocks that Live Preview does not render as lines: tables, callouts, math
+   blocks, embedded files, remote images. No line decoration reaches them, so
+   they are handled separately. */
 const EMBED_SELECTOR = ":scope > .cm-embed-block, :scope > .math-block, :scope > .internal-embed, :scope > img";
 
-/* Signale aux editeurs ouverts qu'un reglage a change : rien dans le document
-   ne bouge, donc aucune transaction ne serait emise sans cela. */
+/* Tells open editors that a setting has changed: nothing in the document
+   moves, so no transaction would be emitted without it. */
 const refreshEffect = StateEffect.define();
 
 /* ==================================================================
-   Lecture de la source
+   Reading the source
    ================================================================== */
 
 /**
- * Construit, a partir du texte source, le niveau d'indentation de chaque ligne
- * et le numero de chaque ligne de titre.
+ * Builds, from the source text, the indentation level of every line and the
+ * number of every heading line.
  *
- * Ignore les titres qui n'en sont pas : lignes a l'interieur d'un bloc de code
- * clos par ``` ou ~~~, et front matter YAML en tete de fichier.
+ * Ignores headings that are not ones: lines inside a code block fenced by ```
+ * or ~~~, and YAML front matter at the top of the file.
  *
- * @param {string} text contenu complet du fichier
- * @param {number} startLevel niveau de titre portant le premier rang (1 a 6)
+ * @param {string} text the complete file contents
+ * @param {number} startLevel heading level carrying the first rank (1 to 6)
  * @returns {{levels: number[], numbers: (string|null)[], headings: boolean[],
- *          joins: number[]}} indexes par numero de ligne (0-based) ; numbers
- *          vaut null hors ligne de titre numerotee ; headings marque les lignes
- *          de titre ; joins donne le nombre de barres deja ouvertes dans le
- *          bloc precedent, donc prolongeables vers le haut
+ *          joins: number[]}} indexed by line number (0-based); numbers is null
+ *          outside a numbered heading line; headings marks the heading lines;
+ *          joins gives the number of bars already open in the previous block,
+ *          hence extendable upwards
  */
 function buildHeadingMap(text, startLevel) {
 	const lines = text.split("\n");
@@ -120,45 +248,44 @@ function buildHeadingMap(text, startLevel) {
 	const headings = new Array(lines.length).fill(false);
 	const joins = new Array(lines.length).fill(0);
 
-	// Jeu propre au mode Edition. En Lecture, une ligne vide ne produit aucun
-	// bloc ; en Edition elle occupe une hauteur et doit donc porter ses barres,
-	// sous peine d'un trait coupe a chaque saut de ligne. Elle prend le niveau
-	// de la derniere ligne pleine, et le raccord se calcule alors de proche en
-	// proche plutot qu'en sautant les vides.
+	// A set of its own for Editing view. In Reading, a blank line produces no
+	// block; in Editing it takes up height and must therefore carry its bars,
+	// on pain of a line broken at every carriage return. It takes the level of
+	// the last non-blank line, and the join is then computed step by step
+	// rather than by skipping over the blanks.
 	const editLevels = new Array(lines.length).fill(0);
 	const editJoins = new Array(lines.length).fill(0);
 
-	// Lignes de liste, et premiere ligne de chaque liste. En Lecture, une liste
-	// est un bloc qui porte sa propre indentation et sa marge ; en Edition ce ne
-	// sont que des lignes ordinaires. Les reperer permet de leur rendre ces deux
-	// proprietes, et donc d'aligner les deux modes.
+	// List lines, and the first line of each list. In Reading, a list is a
+	// block carrying its own indentation and margin; in Editing they are only
+	// ordinary lines. Spotting them is what gives those two properties back,
+	// and so aligns the two views.
 	const lists = new Array(lines.length).fill(false);
 	const listStarts = new Array(lines.length).fill(false);
 	let lastFullLineWasList = false;
 
-	// Premiere ligne pleine du document, front matter exclu. Le bloc qui
-	// commence la n'a rien avant lui : en Lecture, aucune des regles
-	// d'espacement d'Obsidian ne l'atteint.
+	// First non-blank line of the document, front matter excluded. The block
+	// starting there has nothing before it: in Reading, none of Obsidian's
+	// spacing rules reach it.
 	let firstLine = -1;
 
-	// Lignes de tableau, et bloc qui en precede un.
+	// Table lines, and the block preceding one.
 	//
-	// Obsidian pose « overflow-x: auto » en inline sur un bloc de tableau, pour
-	// le defilement horizontal. Un overflow non visible rogne aussi le
-	// debordement vertical : le raccord qu'un tableau trace au-dessus de sa
-	// boite y est donc invisible. C'est au bloc precedent, lui non rogne, de
-	// descendre jusqu'a lui.
+	// Obsidian sets "overflow-x: auto" inline on a table block, for horizontal
+	// scrolling. A non-visible overflow also clips vertical overflow: the join
+	// a table draws above its own box is therefore invisible there. It falls to
+	// the previous block, which is not clipped, to reach down to it.
 	const tables = new Array(lines.length).fill(false);
 	const beforeTables = new Array(lines.length).fill(false);
 
-	const counters = [0, 0, 0, 0, 0, 0, 0];   // indexes 1 a 6, la case 0 est inutilisee
-	let current = 0;        // niveau du dernier titre rencontre
-	let fenceChar = "";     // ` ou ~ si on est dans un bloc de code, sinon ""
+	const counters = [0, 0, 0, 0, 0, 0, 0];   // indexes 1 to 6, slot 0 is unused
+	let current = 0;        // level of the last heading encountered
+	let fenceChar = "";     // ` or ~ while inside a code block, otherwise ""
 	let fenceLength = 0;
-	let lastLevel = -1;     // niveau du bloc precedent ; -1 tant qu'il n'y en a pas
+	let lastLevel = -1;     // level of the previous block; -1 until there is one
 	let i = 0;
 
-	// Front matter : tout ce qui est entre les deux --- reste au niveau 0.
+	// Front matter: everything between the two --- stays at level 0.
 	if (lines.length > 0 && lines[0].trim() === "---") {
 		i = 1;
 		while (i < lines.length && lines[i].trim() !== "---") i++;
@@ -170,8 +297,8 @@ function buildHeadingMap(text, startLevel) {
 		const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
 
 		if (fenceChar !== "") {
-			// Dans un bloc de code : seule une cloture du meme type et au moins
-			// aussi longue en sort. Aucun titre n'est reconnu d'ici la.
+			// Inside a code block: only a fence of the same type and at least
+			// as long gets out of it. No heading is recognized until then.
 			if (fence && fence[1][0] === fenceChar && fence[1].length >= fenceLength) {
 				fenceChar = "";
 				fenceLength = 0;
@@ -186,8 +313,8 @@ function buildHeadingMap(text, startLevel) {
 			if (!heading) {
 				levels[i] = current;
 
-				// Puce ou numero suivi d'une espace. Un separateur horizontal
-				// (---) n'en a pas, il n'est donc pas confondu avec une puce.
+				// A bullet or number followed by a space. A horizontal rule
+				// (---) has none, so it is not mistaken for a bullet.
 				if (/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/.test(line)) {
 					lists[i] = true;
 					listStarts[i] = !lastFullLineWasList;
@@ -197,17 +324,17 @@ function buildHeadingMap(text, startLevel) {
 			} else {
 				const level = heading[1].length;
 				current = level;
-				levels[i] = level - 1;   // la ligne du titre s'aligne sur son parent
+				levels[i] = level - 1;   // the heading line aligns on its parent
 				headings[i] = true;
 
-				// Tout titre remet a zero les rangs plus profonds, y compris un
-				// titre situe au-dessus de startLevel : c'est ce qui fait
-				// repartir la numerotation a 1 dans chaque nouveau chapitre.
+				// Any heading resets the deeper ranks, including a heading
+				// sitting above startLevel: this is what restarts numbering
+				// at 1 in every new chapter.
 				for (let deeper = level + 1; deeper <= 6; deeper++) counters[deeper] = 0;
 
 				if (level >= startLevel) {
-					// Niveau saute (un H4 juste apres un H2) : on ouvre le rang
-					// manquant a 1 plutot que d'afficher un zero.
+					// Skipped level (an H4 right after an H2): the missing
+					// rank opens at 1 rather than displaying a zero.
 					for (let above = startLevel; above < level; above++) {
 						if (counters[above] === 0) counters[above] = 1;
 					}
@@ -217,20 +344,19 @@ function buildHeadingMap(text, startLevel) {
 			}
 		}
 
-		// Barres prolongeables vers le haut : celles que le bloc precedent
-		// tracait deja. Un titre en ouvre une nouvelle, plus profonde, qui n'a
-		// aucune raison de remonter au-dessus de lui — c'est elle qui doit
-		// demarrer a sa hauteur, comme elle demarrerait au premier paragraphe
-		// d'une section ordinaire.
+		// Bars extendable upwards: those the previous block was already
+		// drawing. A heading opens a new, deeper one, which has no reason to
+		// climb above it — that one has to start at its own height, just as it
+		// would start at the first paragraph of an ordinary section.
 		joins[i] = lastLevel < 0 ? 0 : Math.min(levels[i], lastLevel);
 
 		const blank = line.trim() === "";
 		editLevels[i] = blank ? Math.max(lastLevel, 0) : levels[i];
 		editJoins[i] = i === 0 ? 0 : Math.min(editLevels[i], editLevels[i - 1]);
 
-		// Une ligne vide separe deux blocs sans en constituer un. C'est aussi
-		// pourquoi elle ne rompt pas une liste : une ligne vide entre deux
-		// puces n'ouvre pas une seconde liste, en Markdown comme a l'ecran.
+		// A blank line separates two blocks without making one. That is also
+		// why it does not break a list: a blank line between two bullets does
+		// not open a second list, in Markdown as on screen.
 		if (!blank) {
 			if (firstLine < 0) firstLine = i;
 			lastLevel = levels[i];
@@ -238,10 +364,10 @@ function buildHeadingMap(text, startLevel) {
 		}
 	}
 
-	// Seconde passe : reperer le bloc qui precede chaque tableau. Le marquage
-	// porte sur sa premiere ligne, celle qui identifie le bloc au rendu.
-	let openBlock = -1;    // premiere ligne du bloc en cours, -1 entre deux blocs
-	let lastBlock = -1;    // premiere ligne du bloc precedent
+	// Second pass: spot the block preceding each table. The mark goes on its
+	// first line, the one identifying the block in the rendered output.
+	let openBlock = -1;    // first line of the current block, -1 between two blocks
+	let lastBlock = -1;    // first line of the previous block
 	for (let k = 0; k < lines.length; k++) {
 		if (lines[k].trim() === "") {
 			if (openBlock >= 0) {
@@ -250,7 +376,7 @@ function buildHeadingMap(text, startLevel) {
 			}
 			continue;
 		}
-		if (openBlock >= 0) continue;   // suite du bloc en cours
+		if (openBlock >= 0) continue;   // continuation of the current block
 
 		if (tables[k] && lastBlock >= 0 && !tables[lastBlock]) beforeTables[lastBlock] = true;
 		openBlock = k;
@@ -266,11 +392,11 @@ function buildHeadingMap(text, startLevel) {
 }
 
 /**
- * Attributs d'un bloc, a partir de la carte et de l'index de sa premiere ligne.
+ * A block's attributes, from the map and the index of its first line.
  *
- * Le numero est pose meme quand la numerotation est desactivee : c'est une
- * classe sur <body> qui commande son affichage. Basculer le reglage reste ainsi
- * immediat, sans re-rendu des notes ouvertes.
+ * The number is set even when numbering is off: a class on <body> is what
+ * commands its display. Toggling the setting thus stays immediate, with no
+ * re-render of the open notes.
  */
 function attrsForLine(map, index, mode) {
 	const source = mode === "edit"
@@ -286,21 +412,21 @@ function attrsForLine(map, index, mode) {
 	};
 	if (map.numbers[index]) attributes["data-hib-number"] = map.numbers[index];
 
-	// Le mode Lecture n'en a pas besoin : Obsidian y rend deja les listes comme
-	// des blocs, avec leur indentation et leur marge.
+	// Reading view has no need for these: Obsidian already renders lists there
+	// as blocks, with their indentation and their margin.
 	if (mode === "edit") {
 		if (map.lists[index]) attributes["data-hib-list"] = "1";
 		if (map.listStarts[index]) attributes["data-hib-list-start"] = "1";
 	}
 
-	// Reciproquement, l'Edition espace deja son premier titre : la regle
-	// d'Obsidian y vaut pour toute ligne de titre, sans condition sur ce qui
-	// precede.
+	// Conversely, Editing already spaces its first heading: Obsidian's rule
+	// holds there for every heading line, with no condition on what comes
+	// before it.
 	if (mode === "read") {
 		if (index === map.firstLine) attributes["data-hib-first"] = "1";
 
-		// L'Edition n'en a pas besoin : son tableau est un bloc unique, pose
-		// entre deux lignes jointives, sans marge a franchir.
+		// Editing has no need for this: its table is a single block, sitting
+		// between two adjoining lines, with no margin to cross.
 		if (map.tables[index]) attributes["data-hib-table"] = "1";
 		if (map.beforeTables[index]) attributes["data-hib-before-table"] = "1";
 	}
@@ -309,16 +435,16 @@ function attrsForLine(map, index, mode) {
 }
 
 /* ==================================================================
-   Mode Edition — extension CodeMirror
+   Editing view — CodeMirror extension
    ================================================================== */
 
 /**
- * Pose les memes attributs que le mode Lecture sur les lignes visibles, via des
- * decorations de ligne, et sur les blocs que Live Preview ne rend pas en lignes.
+ * Sets the same attributes as Reading view on the visible lines, through line
+ * decorations, and on the blocks Live Preview does not render as lines.
  *
- * La carte est calculee sur le document entier — seul moyen de connaitre le
- * titre courant d'une ligne visible dont l'ancre est hors ecran — mais les
- * decorations ne sont posees que sur le viewport.
+ * The map is computed over the whole document — the only way to know the
+ * current heading of a visible line whose anchor is off screen — but the
+ * decorations are only set on the viewport.
  */
 function createEditorExtension(plugin) {
 	return ViewPlugin.fromClass(
@@ -375,13 +501,13 @@ function createEditorExtension(plugin) {
 			}
 
 			/**
-			 * Tableaux, callouts, blocs math et images sont des blocs a part,
-			 * enfants directs du conteneur et non des lignes : les decorations
-			 * ne les atteignent pas. On leur pose les memes attributs a la main,
-			 * en passant par leur position dans le document.
+			 * Tables, callouts, math blocks and images are blocks of their
+			 * own, direct children of the container rather than lines: the
+			 * decorations do not reach them. The same attributes are set on
+			 * them by hand, by way of their position in the document.
 			 *
-			 * Ecriture differee via requestMeasure : le DOM n'est pas encore a
-			 * jour au moment de l'update.
+			 * The write is deferred through requestMeasure: the DOM is not up
+			 * to date yet at update time.
 			 */
 			syncBlocks(view) {
 				view.requestMeasure({
@@ -402,7 +528,7 @@ function createEditorExtension(plugin) {
 							try {
 								position = measuredView.posAtDOM(block);
 							} catch (error) {
-								continue;   // bloc detache entre l'update et la mesure
+								continue;   // block detached between update and measure
 							}
 							const index = measuredView.state.doc.lineAt(position).number - 1;
 							syncBlockAttributes(block, attrsForLine(map, index, "edit"));
@@ -425,9 +551,9 @@ class HeadingIndentBars extends Plugin {
 		this.applyCssVariables();
 		this.addSettingTab(new HeadingIndentBarsSettingTab(this.app, this));
 
-		// Cache a une entree : getSectionInfo renvoie la meme instance de chaine
-		// pour toutes les sections d'un meme rendu, la comparaison est donc une
-		// egalite de reference.
+		// One-entry cache: getSectionInfo returns the same string instance for
+		// every section of a single render, so the comparison is a reference
+		// equality.
 		this.cachedText = null;
 		this.cachedStart = null;
 		this.cachedMap = null;
@@ -436,7 +562,7 @@ class HeadingIndentBars extends Plugin {
 			if (!this.settings.enabled.read) return;
 
 			const info = ctx.getSectionInfo(el);
-			if (!info) return;   // bloc sans origine dans le fichier (titre en ligne, embed)
+			if (!info) return;   // block with no origin in the file (inline heading, embed)
 
 			const map = this.getReadMap(info.text);
 			if (typeof map.levels[info.lineStart] !== "number") return;
@@ -468,15 +594,15 @@ class HeadingIndentBars extends Plugin {
 	}
 
 	/**
-	 * Marque le bloc du mode Lecture.
+	 * Marks the Reading view block.
 	 *
-	 * L'element recu par le post-processeur est parfois re-enveloppe par
-	 * Obsidian dans le <div class="el-..."> qui portera reellement la
-	 * geometrie du bloc. On reporte alors les attributs sur cet ancetre, faute
-	 * de quoi l'indentation s'appliquerait a une boite interne. Ils sont retires
-	 * de l'element d'origine pour eviter un decalage applique deux fois.
+	 * The element the post-processor receives is sometimes re-wrapped by
+	 * Obsidian in the <div class="el-..."> that will actually carry the
+	 * block's geometry. The attributes are then carried over to that ancestor,
+	 * failing which the indentation would apply to an inner box. They are
+	 * removed from the original element to avoid an offset applied twice.
 	 *
-	 * Le numero est pose sur le <hN> lui-meme, pour s'inserer dans son texte.
+	 * The number goes on the <hN> itself, so as to sit inside its text.
 	 */
 	tagBlock(el, attributes) {
 		const number = attributes["data-hib-number"];
@@ -493,7 +619,7 @@ class HeadingIndentBars extends Plugin {
 
 		requestAnimationFrame(() => {
 			const section = el.closest(".markdown-preview-section");
-			if (!section) return;   // pas encore insere : les attributs restent sur el
+			if (!section) return;   // not inserted yet: the attributes stay on el
 
 			let host = el;
 			while (host.parentElement && host.parentElement !== section) {
@@ -531,8 +657,8 @@ class HeadingIndentBars extends Plugin {
 		}
 	}
 
-	/** Recalcule les vues ouvertes : necessaire quand un reglage change les
-	 *  valeurs elles-memes, pas seulement leur affichage. */
+	/** Recomputes the open views: needed when a setting changes the values
+	 *  themselves, not only how they are displayed. */
 	refreshViews() {
 		this.cachedText = null;
 		this.cachedMap = null;
@@ -562,13 +688,13 @@ function setOrClear(style, name, value, unit) {
 }
 
 /**
- * Ecrit les attributs d'un bloc de l'editeur, mais uniquement ceux qui changent.
+ * Writes an editor block's attributes, but only those that change.
  *
- * Cette ecriture a lieu dans la phase de mesure de CodeMirror : toucher un
- * attribut qui influe sur la mise en page invalide les mesures en cours et
- * relance le cycle, jusqu'a l'avertissement « Measure loop restarted more than
- * 5 times ». Comparer avant d'ecrire suffit a le rompre, puisque le second
- * passage ne modifie plus rien.
+ * This write happens during CodeMirror's measure phase: touching an attribute
+ * that bears on layout invalidates the measurements under way and restarts the
+ * cycle, up to the "Measure loop restarted more than 5 times" warning.
+ * Comparing before writing is enough to break it, since the second pass no
+ * longer modifies anything.
  */
 function syncBlockAttributes(el, attributes) {
 	for (const name of DATA_ATTRS) {
@@ -603,11 +729,11 @@ function clearAttributes(root) {
 }
 
 /**
- * Reprend les reglages enregistres, quel que soit leur age.
+ * Takes up the saved settings, whatever their age.
  *
- * Le format d'origine etait plat : un seul jeu de valeurs, pour le mode Lecture
- * seul. Il est reverse tel quel dans « read », de sorte qu'une mise a jour du
- * plugin ne fasse perdre aucun reglage.
+ * The original format was flat: a single set of values, for Reading view
+ * alone. It is poured as-is into "read", so that updating the plugin loses no
+ * setting.
  */
 function migrateSettings(raw) {
 	const settings = {
@@ -624,12 +750,12 @@ function migrateSettings(raw) {
 		return settings;
 	}
 
-	Object.assign(settings.read, raw);   // ancien format plat
+	Object.assign(settings.read, raw);   // old flat format
 	return settings;
 }
 
 /* ==================================================================
-   Onglet de reglages
+   Settings tab
    ================================================================== */
 
 class HeadingIndentBarsSettingTab extends PluginSettingTab {
@@ -642,17 +768,20 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		this.renderMode(containerEl, "read", "Mode Lecture", "S'applique aussi à l'export PDF.");
-		this.renderMode(containerEl, "edit", "Mode Édition", "Live Preview et mode Source.");
+		this.renderMode(containerEl, "read");
+		this.renderMode(containerEl, "edit");
 	}
 
-	renderMode(containerEl, mode, title, description) {
+	renderMode(containerEl, mode) {
 		const settings = this.plugin.settings[mode];
 
-		new Setting(containerEl).setName(title).setDesc(description).setHeading();
+		new Setting(containerEl)
+			.setName(t(`mode.${mode}.name`))
+			.setDesc(t(`mode.${mode}.desc`))
+			.setHeading();
 
 		new Setting(containerEl)
-			.setName("Activer dans ce mode")
+			.setName(t("enabled.name"))
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.enabled[mode])
@@ -664,8 +793,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Décalage par niveau")
-			.setDesc("En pixels. Le contenu sous un H2 est décalé de deux fois cette valeur. Au-delà de 50, les tableaux profonds deviennent étroits.")
+			.setName(t("step.name"))
+			.setDesc(t("step.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder(String(DEFAULT_MODE.step))
@@ -677,8 +806,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Épaisseur des barres")
-			.setDesc("En pixels.")
+			.setName(t("barWidth.name"))
+			.setDesc(t("barWidth.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder(String(DEFAULT_MODE.barWidth))
@@ -690,8 +819,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Raccord entre deux blocs")
-			.setDesc("En pixels. Hauteur du trait qui relie un bloc au bloc précédent. Vide = espacement des paragraphes du thème. Augmente si les barres apparaissent pointillées entre deux paragraphes.")
+			.setName(t("bleed.name"))
+			.setDesc(t("bleed.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder("auto")
@@ -703,8 +832,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Raccord au-dessus d'un titre")
-			.setDesc("En pixels. L'espace qui précède un titre est bien plus large que celui qui sépare deux paragraphes : son raccord lui est donc propre, sans quoi les barres se coupent juste avant chaque titre. Vide = marge supérieure des titres du thème.")
+			.setName(t("headingBleed.name"))
+			.setDesc(t("headingBleed.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder("auto")
@@ -716,8 +845,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Couleur des barres")
-			.setDesc("Couleur CSS. Vide = couleur de bordure du thème, qui suit le mode clair et sombre.")
+			.setName(t("barColor.name"))
+			.setDesc(t("barColor.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder("auto")
@@ -729,8 +858,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Numéroter les titres")
-			.setDesc("Ajoute 1, 1.1, 1.1.1 devant chaque titre, en affichage seulement : les fichiers Markdown ne sont jamais modifiés.")
+			.setName(t("numbering.name"))
+			.setDesc(t("numbering.desc"))
 			.addToggle((toggle) =>
 				toggle
 					.setValue(settings.numbering)
@@ -742,8 +871,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Premier niveau numéroté")
-			.setDesc("Niveau de titre qui porte le rang 1. Sur 2, le H1 en tête de note n'est pas numéroté et les H2 deviennent 1, 2, 3. Sur 1, le H1 devient 1 et les H2 deviennent 1.1, 1.2.")
+			.setName(t("numberingStart.name"))
+			.setDesc(t("numberingStart.desc"))
 			.addDropdown((dropdown) => {
 				for (let level = 1; level <= 6; level++) dropdown.addOption(String(level), `H${level}`);
 				dropdown
@@ -756,8 +885,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Espace après le numéro")
-			.setDesc("En pixels, entre le numéro et le texte du titre. En pixels et non en em, pour que l'écart reste le même à tous les niveaux de titre.")
+			.setName(t("numberGap.name"))
+			.setDesc(t("numberGap.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder(String(DEFAULT_MODE.numberGap))
@@ -769,13 +898,13 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		if (mode === "read") {
-			// L'Edition espace deja son premier titre : sa regle vaut pour toute
-			// ligne de titre, sans condition sur ce qui precede. En Lecture, la
-			// marge n'est posee que si un bloc de texte precede le titre, ce que
-			// le premier n'a par definition pas.
+			// Editing already spaces its first heading: its rule holds for
+			// every heading line, with no condition on what comes before. In
+			// Reading, the margin is only set if a text block precedes the
+			// heading, which the first one by definition has not.
 			new Setting(containerEl)
-				.setName("Marge au-dessus du premier titre")
-				.setDesc("En pixels. Ne concerne que le titre en tête de note, qu'Obsidian laisse sans marge faute de bloc avant lui. Vide = espacement des paragraphes, la valeur qu'applique le mode Édition.")
+				.setName(t("firstHeadingSpace.name"))
+				.setDesc(t("firstHeadingSpace.desc"))
 				.addText((text) =>
 					text
 						.setPlaceholder("auto")
@@ -787,8 +916,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 				);
 
 			new Setting(containerEl)
-				.setName("Espace autour d'un tableau")
-				.setDesc("En pixels, au-dessus et au-dessous. Reprend la marge qu'Obsidian donne aux tableaux, mais posée à l'intérieur du bloc pour que les barres la traversent au lieu de s'y interrompre. Vide = espacement des paragraphes, donc apparence inchangée.")
+				.setName(t("tableSpace.name"))
+				.setDesc(t("tableSpace.desc"))
 				.addText((text) =>
 					text
 						.setPlaceholder("auto")
@@ -801,13 +930,13 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		// Le mode Lecture rend deja les listes comme des blocs : elles y portent
-		// leur indentation et leur marge sans qu'on ait a intervenir. En Edition
-		// ce ne sont que des lignes, d'ou ces deux reglages qui n'existent que
-		// pour ce mode.
+		// Reading view already renders lists as blocks: they carry their
+		// indentation and their margin there with no intervention. In Editing
+		// they are only lines, hence these settings that exist for that view
+		// alone.
 		new Setting(containerEl)
-			.setName("Décalage des listes")
-			.setDesc("En pixels, jusqu'à la puce. Vide = la position qu'elle occupe en mode Lecture, où le texte de l'item se tient à 3ch et la puce 0.8em avant lui.")
+			.setName(t("listIndent.name"))
+			.setDesc(t("listIndent.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder("auto")
@@ -819,8 +948,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Marge avant une liste")
-			.setDesc("En pixels, au-dessus de la première puce seulement. Vide = espacement des paragraphes du thème.")
+			.setName(t("listSpacing.name"))
+			.setDesc(t("listSpacing.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder("auto")
@@ -832,8 +961,8 @@ class HeadingIndentBarsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Retrait de la puce")
-			.setDesc("En pixels. Recul de la puce par rapport au texte de son item, qui seul porte le décalage des listes. C'est ce retrait qui aligne les lignes repliées sous le texte plutôt que sous la puce. Vide = 0.8em, la valeur du mode Lecture.")
+			.setName(t("listHanging.name"))
+			.setDesc(t("listHanging.desc"))
 			.addText((text) =>
 				text
 					.setPlaceholder("auto")
@@ -852,7 +981,7 @@ function clamp(value, fallback, min, max) {
 	return Math.min(max, Math.max(min, parsed));
 }
 
-/** Champ numerique dont le vide est une valeur : « auto ». */
+/** A numeric field whose empty value is a value of its own: "auto". */
 function optional(value, fallback, min, max) {
 	const trimmed = String(value).trim();
 	return trimmed === "" ? "" : clamp(trimmed, fallback, min, max);

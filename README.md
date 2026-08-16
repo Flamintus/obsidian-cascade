@@ -32,35 +32,42 @@ Applied depth:
 
 ## Settings
 
-Each mode — Reading and Editing — carries its own copy of these.
+Each view — Reading and Editing — carries its own copy of these.
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| Step | 40 px | Indentation added per level |
-| Bar width | 1 px | Thickness of the vertical guide |
-| Bar color | theme border | Any CSS color; empty follows the theme |
-| Bleed | auto | How far the guide extends past the block |
-| Heading bleed | auto | Same, above a heading line |
-| Numbering | on | Automatic heading numbers |
-| Numbering start | 2 | Heading level that carries the first rank |
-| Number gap | 8 px | Space between the number and the heading text |
+| Enable in this view | on / off | Reading is on out of the box, Editing is off |
+| Offset per level | 40 px | Indentation added per heading level |
+| Bar thickness | 1 px | Thickness of the vertical guide |
+| Join between two blocks | auto | Height of the line connecting a block to the one before it |
+| Join above a heading | auto | The same join, for the wider space that precedes a heading |
+| Bar color | theme border | Any CSS color; empty follows light and dark mode |
+| Number headings | on | Display only — Markdown files are never modified |
+| First numbered level | H2 | Heading level that carries rank 1 |
+| Space after the number | 8 px | Gap between the number and the heading text |
 
 Editing view only, since Reading view already renders lists as blocks:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| List indent | auto | Bullet position |
-| List spacing | auto | Space between list items |
-| List hanging | auto | Bullet hanging offset |
+| List offset | auto | Bullet position |
+| Space before a list | auto | Above the first bullet only |
+| Bullet hanging indent | auto | How far the bullet sits back from its item text |
 
 Reading view only, since Editing view already handles both cases:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| First heading space | auto | Space above the first heading |
-| Table space | auto | Space around tables |
+| Space above the first heading | auto | The heading at the top of a note, which has no block before it |
+| Space around a table | auto | Placed inside the block, so the bars run through it |
 
 Empty means automatic: the value is derived from the active theme's own spacing variables.
+
+## Languages
+
+The interface follows the language set in Obsidian, falling back to English. Currently shipped: **English** and **French**.
+
+Adding one means adding a block to `LOCALES` at the top of `main.js` — a flat map of the same keys as `en`, which is the reference. Missing keys fall back to English rather than showing blanks, so a partial translation is usable from the first key. Regional tags fall back to their base language (`zh-TW` uses `zh` if present).
 
 ## Installation
 
