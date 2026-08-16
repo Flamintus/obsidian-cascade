@@ -4,7 +4,7 @@ Indents content under each heading, draws a vertical guide per level, and number
 
 Works in **Reading view** (including PDF export) and in **Editing view** (Live Preview and Source), each enabled and tuned independently.
 
-<!-- Add a screenshot before submitting: ![Cascade](docs/screenshot.png) -->
+![The same note in Reading view, without Cascade on the left and with it on the right: content indented under the heading that owns it, one vertical guide per open level, and headings numbered 1, 1.1, 1.1.1.](docs/screenshot.png)
 
 ## Features
 
