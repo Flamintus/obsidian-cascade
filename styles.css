@@ -1,0 +1,504 @@
+/* ================================================================
+   Heading Indent Bars — rendu
+
+   main.js pose sur chaque bloc du mode Lecture :
+     data-hib-level    profondeur du bloc, en nombre de crans
+     data-hib-join     nombre de barres deja ouvertes dans le bloc
+                       precedent, donc prolongeables vers le haut
+     data-hib-heading  1 si le bloc est une ligne de titre
+     data-hib-number   numero du titre (sur le <hN> lui-meme)
+
+   Tout le rendu est ici.
+
+   Modele de trace
+     Chaque bloc trace ses barres sur sa seule hauteur, puis un
+     raccord vers le haut qui rejoint le bloc precedent. Le raccord
+     est limite aux barres que ce bloc precedent tracait deja : une
+     barre nouvelle demarre donc exactement a son bloc, jamais
+     au-dessus. C'est ce qui distingue un titre qui ouvre une
+     sous-section du texte qui la remplit.
+
+     Aucun debord vers le bas : le bloc suivant se raccorde
+     lui-meme. Rien ne depasse donc en fin de section.
+
+   Les variables sont pilotees par l'onglet de reglages du plugin,
+   qui les ecrit en inline sur <body> et surcharge donc les valeurs
+   par defaut ci-dessous. Un champ vide dans les reglages retire la
+   surcharge et rend la main a la valeur par defaut.
+   ================================================================ */
+
+body {
+	--hib-step:      40px;
+	--hib-bar-width: 1px;
+	--hib-bar-color: var(--background-modifier-border);
+
+	/* Distance a franchir pour rejoindre le bloc precedent. Les marges
+	   des paragraphes s'echappent de leur conteneur par fusion des
+	   marges : l'intervalle entre deux blocs vaut donc l'espacement
+	   des paragraphes du theme. */
+	--hib-bleed: var(--p-spacing, 1rem);
+
+	/* Un titre est precede d'un espace bien plus large : sa propre
+	   marge superieure. */
+	--hib-heading-bleed: var(--heading-spacing, 2.4rem);
+
+	/* Ecart entre le chevron de repli et le debut du titre. Mesure entre
+	   les deux, et non depuis le bord : le chevron est colle par sa
+	   droite, sa largeur ne mange donc pas cet ecart. */
+	--hib-chevron-offset: 5px;
+
+	/* Marge au-dessus du seul titre en tete de note. Obsidian ne pose la
+	   sienne que sur un titre precede d'un bloc de texte :
+
+	     .markdown-rendered div:is(.el-p,.el-pre,.el-table,.el-ul,.el-ol)
+	       + div > :is(h1,h2,h3,h4,h5,h6) { margin-top: var(--heading-spacing) }
+
+	   Le premier titre n'a rien avant lui, la regle ne l'atteint donc
+	   jamais. Le mode Edition, lui, espace toute ligne de titre sans
+	   condition, avec l'espacement des paragraphes : c'est la valeur
+	   reprise ici. */
+	--hib-first-heading-space: var(--p-spacing, 1rem);
+
+	/* Espace de part et d'autre d'un tableau, repris de la marge que lui
+	   donne Obsidian :
+
+	     .markdown-rendered table { margin-block: var(--p-spacing) }
+
+	   Cette marge est remise a zero et rendue au bloc sous forme de
+	   padding — voir la regle plus bas. */
+	--hib-table-space: var(--p-spacing, 1rem);
+
+	/* Jeu du mode Edition, entierement distinct : memes attributs, mais
+	   une structure DOM et des espacements sans rapport. */
+	--hib-edit-step:      40px;
+	--hib-edit-bar-width: 1px;
+	--hib-edit-bar-color: var(--background-modifier-border);
+	--hib-edit-number-gap: 8px;
+
+	/* Les lignes de l'editeur sont jointives : rien a franchir entre
+	   deux d'entre elles. */
+	--hib-edit-bleed: 0px;
+
+	/* Une ligne de titre, elle, porte une marge superieure. Mieux vaut
+	   la surestimer : le trop-plein se superpose aux barres de la ligne
+	   precedente, qui sont les memes, et reste donc invisible. */
+	--hib-edit-heading-bleed: var(--heading-spacing, 2.4rem);
+
+	/* Listes. En Lecture, Obsidian les rend comme un bloc qui porte son
+	   indentation, sa marge et l'ecart de sa puce ; en Edition ce ne
+	   sont que des lignes. Les trois valeurs ci-dessous leur rendent
+	   chacune de ces proprietes, et reprennent celles du rendu :
+
+	     .markdown-rendered ul > li      { margin-inline-start: 3ch }
+	     .markdown-rendered ul           { margin-block-start: var(--p-spacing) }
+	     .markdown-rendered .list-bullet { margin-inline-start: -0.8em }
+
+	   3ch et non --list-indent : cette derniere ne gouverne que les
+	   listes imbriquees, et vaut pres du double.
+
+	   Trois positions, et non deux : la puce a 3ch - 0.8em, le texte de
+	   l'item a 3ch, ses lignes repliees a 3ch. En Edition la ligne
+	   commence par la puce : c'est donc 3ch - 0.8em qui l'indente, et le
+	   retrait suspendu ci-dessous ramene texte et repli a 3ch. */
+	--hib-edit-list-indent:  calc(3ch - 0.8em);
+	--hib-edit-list-spacing: var(--p-spacing, 1rem);
+	--hib-edit-list-hanging: 0.8em;
+}
+
+/* Profondeur du bloc, et hauteur du raccord qui le precede. */
+.markdown-preview-view [data-hib-level="0"] { --hib-level: 0; }
+.markdown-preview-view [data-hib-level="1"] { --hib-level: 1; }
+.markdown-preview-view [data-hib-level="2"] { --hib-level: 2; }
+.markdown-preview-view [data-hib-level="3"] { --hib-level: 3; }
+.markdown-preview-view [data-hib-level="4"] { --hib-level: 4; }
+.markdown-preview-view [data-hib-level="5"] { --hib-level: 5; }
+.markdown-preview-view [data-hib-level="6"] { --hib-level: 6; }
+
+.markdown-preview-view [data-hib-join="0"] { --hib-join: 0; }
+.markdown-preview-view [data-hib-join="1"] { --hib-join: 1; }
+.markdown-preview-view [data-hib-join="2"] { --hib-join: 2; }
+.markdown-preview-view [data-hib-join="3"] { --hib-join: 3; }
+.markdown-preview-view [data-hib-join="4"] { --hib-join: 4; }
+.markdown-preview-view [data-hib-join="5"] { --hib-join: 5; }
+.markdown-preview-view [data-hib-join="6"] { --hib-join: 6; }
+
+.markdown-preview-view [data-hib-level]                { --hib-join-bleed: var(--hib-bleed); }
+.markdown-preview-view [data-hib-heading="1"]          { --hib-join-bleed: var(--hib-heading-bleed); }
+
+/* Tableaux — premiere moitie : l'espace propre au bloc.
+
+   Obsidian pose « overflow-x: auto » en inline sur un bloc de tableau,
+   pour que les tableaux larges defilent. Or un overflow horizontal non
+   visible force le rognage vertical : tout ce qu'un tableau trace
+   au-dessus de sa boite est coupe. Son raccord etait donc invisible,
+   quelle que soit sa hauteur — et l'agrandir n'y pouvait rien.
+
+   Premiere mesure, sans toucher a cet overflow : l'espace propre au
+   tableau passe a l'interieur de la boite. Sa marge est remise a zero
+   et rendue en padding, a l'identique — l'apparence ne bouge pas, mais
+   les barres le traversent. Son raccord propre, lui, ne servirait a
+   rien : il serait rogne.
+
+   La seconde mesure est plus bas, apres les regles de trace : elle les
+   surcharge, et doit donc les suivre. */
+.markdown-preview-view [data-hib-table="1"] table {
+	margin-block: 0;
+}
+.markdown-preview-view [data-hib-table="1"] {
+	padding-block: var(--hib-table-space);
+	--hib-join-bleed: 0px;
+}
+
+/* Indentation.
+   padding et non margin : la boite du bloc garde son bord gauche a
+   l'abscisse 0, ce qui permet aux barres des niveaux parents d'etre
+   tracees dans la gouttiere ainsi liberee. */
+.markdown-preview-view [data-hib-level] {
+	position: relative;
+	padding-left: calc(var(--hib-level, 0) * var(--hib-step));
+}
+
+/* Trace commun aux deux pseudo-elements : une bande repetee tous les
+   crans, sur une largeur de k crans, donne exactement k barres. */
+.markdown-preview-view [data-hib-level]::before,
+.markdown-preview-view [data-hib-level]::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	background-image: linear-gradient(
+		to right,
+		var(--hib-bar-color) 0 var(--hib-bar-width),
+		transparent          var(--hib-bar-width)
+	);
+	background-size:   var(--hib-step) 100%;
+	background-repeat: repeat-x;
+	pointer-events: none;
+}
+
+/* Raccord vers le haut, jusqu'au bloc precedent. */
+.markdown-preview-view [data-hib-level]::before {
+	top:    calc(-1 * var(--hib-join-bleed));
+	height: var(--hib-join-bleed);
+	width:  calc(var(--hib-join, 0) * var(--hib-step));
+}
+
+/* Le bloc lui-meme. */
+.markdown-preview-view [data-hib-level]::after {
+	top:    0;
+	bottom: 0;
+	width:  calc(var(--hib-level, 0) * var(--hib-step));
+}
+
+/* Rien a tracer quand il n'y a aucune barre : evite un pseudo-element
+   inutile sur tout le contenu situe avant le premier titre, et sur le
+   premier bloc de la note, qui n'a rien a rejoindre. */
+.markdown-preview-view [data-hib-level="0"]::after { content: none; }
+.markdown-preview-view [data-hib-join="0"]::before { content: none; }
+
+/* Tableaux — seconde moitie : le raccord qui mene au tableau.
+
+   Un tableau ne peut rien tracer au-dessus de sa boite, son overflow
+   rognerait le trait. C'est donc au bloc precedent de descendre
+   jusqu'a lui : n'etant pas rogne, son trait arrive a destination.
+
+   Cette regle surcharge le « bottom: 0 » du trace ci-dessus, a
+   specificite egale : elle doit imperativement le suivre. */
+.markdown-preview-view [data-hib-before-table="1"]::after {
+	bottom: calc(-1 * var(--hib-bleed));
+}
+
+/* Titre en tete de note : la marge qu'Obsidian ne lui donne pas.
+   padding et non margin : celle d'un premier enfant s'echapperait de son
+   conteneur par fusion des marges, sans creuser l'espace voulu. */
+.markdown-preview-view [data-hib-first="1"][data-hib-heading="1"] {
+	padding-top: var(--hib-first-heading-space);
+}
+
+
+/* ================================================================
+   Numerotation
+
+   main.js pose data-hib-number sur les titres en permanence ; c'est
+   la classe hib-numbering sur <body> qui commande l'affichage. Le
+   reglage bascule donc sans re-rendu des notes ouvertes.
+
+   Le numero est un pseudo-element : il n'existe ni dans le fichier
+   Markdown, ni dans le texte copie depuis la note.
+   ================================================================ */
+
+body.hib-numbering .markdown-preview-view :is(h1, h2, h3, h4, h5, h6)[data-hib-number]::before {
+	content: attr(data-hib-number);
+
+	/* En pixels et non en em, pour rester identique d'un H2 a un H6 au lieu de
+	   suivre le corps du titre. Simple respiration : le chevron ne se loge plus
+	   ici, il est passe devant le numero. */
+	margin-right: var(--hib-number-gap, 8px);
+	color: var(--hib-number-color, var(--text-muted));
+	font-variant-numeric: tabular-nums;
+}
+
+/* ================================================================
+   Chevron de repli
+
+   Obsidian le positionne en absolu sans lui donner de coordonnee : il
+   se pose donc la ou il tomberait dans le flux, c'est-a-dire par-dessus
+   le debut du titre — ou, numerotation active, juste apres le numero.
+   Lui donner une coordonnee explicite suffit a le ramener devant.
+
+   right: 100% colle son bord droit au bord gauche du titre, quelle que
+   soit sa largeur ; la marge creuse ensuite l'ecart voulu. Un left
+   negatif, lui, aurait positionne son bord gauche et l'aurait fait
+   deborder sur le titre.
+
+   Independant de la numerotation : le chevron se place devant ce qui
+   ouvre le titre, numero ou texte.
+
+   Seule regle du plugin qui cible la structure interne d'Obsidian, et
+   donc a reverifier si une mise a jour deplace le chevron.
+   ================================================================ */
+
+.markdown-preview-view [data-hib-heading="1"] :is(h1, h2, h3, h4, h5, h6) {
+	position: relative;
+}
+
+.markdown-preview-view [data-hib-heading="1"] :is(h1, h2, h3, h4, h5, h6) > .collapse-indicator {
+	position: absolute;
+	left: auto;
+	right: 100%;
+	margin-right: var(--hib-chevron-offset);
+	top: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+}
+
+
+/* ================================================================
+   MODE EDITION — Live Preview et Source
+
+   Memes attributs qu'en Lecture, portes par les lignes de l'editeur
+   et par les blocs que Live Preview ne rend pas en lignes (tableaux,
+   callouts, blocs math, integrations, images).
+
+   Une difference de fond avec la Lecture : un seul pseudo-element
+   pour les barres, a deux couches de fond. Une ligne n'en offre que
+   deux, et le second revient au numero. La couche basse trace les
+   barres du bloc, la couche haute le raccord vers la ligne
+   precedente.
+
+   Indentation par bordure transparente. Ni marge — Obsidian s'en sert
+   pour centrer les lignes, et elle reste exterieure a la boite, ce qui
+   rejetait les barres dans la marge de l'editeur —, ni padding, qui
+   ecraserait le retrait suspendu des listes. Voir le detail sur la
+   regle concernee.
+   ================================================================ */
+
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="0"] { --hib-edit-level: 0; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="1"] { --hib-edit-level: 1; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="2"] { --hib-edit-level: 2; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="3"] { --hib-edit-level: 3; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="4"] { --hib-edit-level: 4; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="5"] { --hib-edit-level: 5; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="6"] { --hib-edit-level: 6; }
+
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-join="0"] { --hib-edit-join: 0; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-join="1"] { --hib-edit-join: 1; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-join="2"] { --hib-edit-join: 2; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-join="3"] { --hib-edit-join: 3; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-join="4"] { --hib-edit-join: 4; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-join="5"] { --hib-edit-join: 5; }
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-join="6"] { --hib-edit-join: 6; }
+
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level] {
+	--hib-edit-join-bleed: var(--hib-edit-bleed);
+}
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-heading="1"] {
+	--hib-edit-join-bleed: var(--hib-edit-heading-bleed);
+}
+
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level] {
+	position: relative;
+	--hib-edit-extra: 0px;
+
+	/* Ecart entre le bord gauche de la boite et celui des lignes. Nul
+	   partout, sauf pour les blocs qu'Obsidian fait deliberement deborder
+	   dans la marge. */
+	--hib-edit-block-offset: 0px;
+
+	--hib-edit-indent: calc(
+		var(--hib-edit-level, 0) * var(--hib-edit-step) + var(--hib-edit-extra)
+	);
+
+}
+
+/* Indentation des lignes : par marge.
+
+   Obsidian pose sur chaque ligne de liste un retrait suspendu en style
+   inline — « text-indent: -Npx » avec « padding-inline-start: Npx » —
+   pour que le texte replie s'aligne sous le texte et non sous la puce.
+   Il calcule N en mesurant depuis le bord de la ligne.
+
+   Tout ce qui grossit cette boite fausse donc ce calcul : le padding
+   l'ecrasait purement et simplement, la bordure y etait comptee et
+   repoussait le texte replie d'autant. La marge, elle, reste en dehors
+   et laisse le retrait suspendu juste.
+
+   !important : Obsidian annule la marge de tous les enfants directs du
+   conteneur, lui aussi en !important —
+
+     .markdown-source-view.mod-cm6 .cm-content > * { margin: 0 !important }
+
+   ce qui rendait cette indentation sans effet. Notre selecteur etant
+   plus specifique, il l'emporte des lors qu'il est marque de meme. */
+.markdown-source-view.mod-cm6 .cm-content > .cm-line[data-hib-level] {
+	margin-left: var(--hib-edit-indent) !important;
+}
+
+/* Les blocs, eux, n'ont aucun retrait suspendu a menager : le padding
+   leur convient, et il garde leur trace a l'interieur de leur boite —
+   un tableau, dont l'overflow rogne tout ce qui en sort, ne montrerait
+   aucune barre autrement. */
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level]:not(.cm-line) {
+	padding-left: calc(
+		var(--hib-edit-block-offset, 0px) + var(--hib-edit-indent)
+	) !important;
+}
+
+/* Le widget de tableau est de ceux-la :
+
+     .cm-table-widget { padding: var(--table-drag-handle-size);
+                        margin: 0 calc(-1 * var(--size-4-4)) !important }
+
+   soit 16px de debord a gauche, compenses par son propre padding, ce qui
+   ramene le tableau dans l'alignement. Ce padding est desormais preserve,
+   le tableau reste donc aligne de lui-meme ; seules les barres doivent
+   repartir de ce debord, faute de quoi elles seraient tracees 16px trop
+   a gauche. */
+.markdown-source-view.mod-cm6 .cm-content > .cm-table-widget[data-hib-level] {
+	--hib-edit-block-offset: var(--size-4-4, 16px);
+}
+
+/* Une ligne de liste se decale en plus de son niveau, comme le bloc de
+   liste le fait en Lecture. Les barres, elles, ne bougent pas : elles
+   restent calees sur les crans de titre. */
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-list="1"] {
+	--hib-edit-extra: var(--hib-edit-list-indent);
+}
+
+/* Espace au-dessus de la premiere puce seulement, comme le bloc de liste
+   en Lecture.
+
+   padding et non margin : Obsidian pose « padding: 0 » sur les lignes et
+   gere tous ses espacements d'edition de cette facon, marges comprises.
+   L'espace tombe ainsi a l'interieur de la boite, que les barres
+   traversent deja — aucun raccord a etendre. */
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-list-start="1"] {
+	padding-top: var(--hib-edit-list-spacing) !important;
+}
+
+/* Retrait suspendu des listes.
+
+   Obsidian en pose un lui-meme, en style inline, pour aligner le texte
+   replie sous le texte et non sous la puce. Mais il le calcule en
+   mesurant depuis l'exterieur de la ligne : notre indentation y est
+   comptee, quelle que soit la propriete qui la porte — padding, bordure
+   ou marge —, et le texte replie partait d'autant trop loin.
+
+   On le remplace donc par le notre, dont les valeurs sont celles du
+   mode Lecture. La ligne est indentee jusqu'a la puce ; le retrait
+   pousse texte et lignes repliees de 0.8em au-dela, soit a 3ch.
+
+   Largeur imposee au marqueur : en Lecture, le span de la puce est vide
+   et flotte, il n'occupe donc aucune place et le texte se tient a 3ch.
+   En Edition ce meme span contient le tiret du source, large de 23px la
+   ou le retrait n'en demande que 13, et repoussait le texte d'autant.
+   Le contenu deborde de la boite ainsi fixee, mais il est transparent —
+   seul compte le point, dessine par un pseudo-element.
+
+   D'ou la restriction a Live Preview : en mode Source, le tiret est
+   visible et doit garder sa largeur. */
+.markdown-source-view.mod-cm6 .cm-content > .cm-line[data-hib-list="1"] {
+	padding-inline-start: var(--hib-edit-list-hanging) !important;
+	text-indent: calc(-1 * var(--hib-edit-list-hanging)) !important;
+}
+
+.markdown-source-view.mod-cm6.is-live-preview .cm-content > [data-hib-list="1"] .cm-formatting-list {
+	display: inline-block;
+	width: var(--hib-edit-list-hanging);
+}
+
+/* Le point est un pseudo-element absolu, cale sur le span qui porte le
+   tiret. En Lecture ce span est en tete et hors flux, le point tombe
+   donc a un retrait entier du texte. En Edition il suit le tiret dans
+   le flux, et se retrouve donc a la fin du marqueur — le point mordait
+   alors sur la premiere lettre.
+
+   L'ancrer au debut du marqueur suffit ; c'est sa position qui comptait,
+   non sa largeur. */
+.markdown-source-view.mod-cm6.is-live-preview .cm-content > [data-hib-list="1"] .cm-formatting-list {
+	position: relative;
+}
+.markdown-source-view.mod-cm6.is-live-preview .cm-content > [data-hib-list="1"] .list-bullet {
+	position: absolute;
+	left: 0;
+}
+
+/* Origine du trace, selon la propriete qui porte l'indentation.
+
+   Une ligne l'a en marge, exterieure a sa boite : on remonte donc de
+   toute l'indentation pour retrouver le bord du conteneur. Un bloc l'a
+   en padding, interieur : son bord gauche est deja le bon, et seul le
+   debord de ceux qui en ont un reste a reprendre. */
+.markdown-source-view.mod-cm6 .cm-content > .cm-line[data-hib-level]::after {
+	left: calc(-1 * var(--hib-edit-indent));
+}
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level]:not(.cm-line)::after {
+	left: var(--hib-edit-block-offset, 0px);
+}
+
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level]::after {
+	content: "";
+	position: absolute;
+	top:    calc(-1 * var(--hib-edit-join-bleed));
+	bottom: 0;
+
+	/* Largeur commune : les barres restent calees sur les crans de titre,
+	   sans suivre le retrait supplementaire des listes. Leur origine, en
+	   revanche, depend de la propriete qui porte l'indentation — voir
+	   les deux regles qui suivent. */
+	width: calc(var(--hib-edit-level, 0) * var(--hib-edit-step));
+
+	/* repeating-linear-gradient et non linear-gradient : le motif se
+	   repete a l'interieur de chaque couche, dont background-size fixe
+	   alors l'etendue. Deux couches peuvent ainsi couvrir des largeurs
+	   differentes dans une meme boite. */
+	background-image:
+		repeating-linear-gradient(to right,
+			var(--hib-edit-bar-color) 0 var(--hib-edit-bar-width),
+			transparent var(--hib-edit-bar-width) var(--hib-edit-step)),
+		repeating-linear-gradient(to right,
+			var(--hib-edit-bar-color) 0 var(--hib-edit-bar-width),
+			transparent var(--hib-edit-bar-width) var(--hib-edit-step));
+	background-size:
+		100% calc(100% - var(--hib-edit-join-bleed)),
+		calc(var(--hib-edit-join, 0) * var(--hib-edit-step)) var(--hib-edit-join-bleed);
+	background-position:
+		0 var(--hib-edit-join-bleed),
+		0 0;
+	background-repeat: no-repeat, no-repeat;
+	pointer-events: none;
+}
+
+.markdown-source-view.mod-cm6 .cm-content > [data-hib-level="0"]::after {
+	content: none;
+}
+
+/* Numerotation. Pseudo-element inline : il pousse le texte de la ligne
+   au lieu de le recouvrir, et n'entre ni dans le document ni dans une
+   copie. */
+body.hib-edit-numbering .markdown-source-view.mod-cm6 .cm-line[data-hib-number]::before {
+	content: attr(data-hib-number);
+	margin-right: var(--hib-edit-number-gap, 8px);
+	color: var(--hib-number-color, var(--text-muted));
+	font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,6 @@
+# Per-vault runtime state, never part of the plugin
+data.json
+
+# OS noise
+.DS_Store
+Thumbs.db
